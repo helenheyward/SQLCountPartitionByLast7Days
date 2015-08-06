@@ -1,0 +1,86 @@
+CREATE PROC [Reporting].[ClosedInspectionEvents]
+
+(
+      @teamId UNIQUEIDENTIFIER
+    , @includeDescendants BIT = 1
+    , @requesterId UNIQUEIDENTIFIER
+    , @languageId INT
+	)
+AS
+SET NOCOUNT ON
+
+BEGIN
+
+;
+
+WITH    cteGetUsers
+          AS ( SELECT   userid ,
+                        [Username] ,
+                        [GivenName] ,
+                        [FamilyName]
+               FROM     [user].[UserProfile] AS UP
+             ),
+        cteClosedEvents
+          AS ( SELECT   [Title] EventTitle ,
+                        [EventInstanceId] ,
+                        CONVERT(DATE, [UpdatedOn], 110) AS Updated_on ,
+                        [GivenName] + SPACE(1) + [FamilyName] AS Updated_by ,
+                        CONVERT(DATE, [TargetDate], 110) AS Target_Date
+               FROM     [Competency].[Event] AS E
+                        INNER JOIN [cteGetUsers] ON [cteGetUsers].[userId] = [E].[UpdatedBy]
+               WHERE    [Closed] = 1
+                        AND [UpdatedOn] >= DATEADD(DAY, -7, GETDATE())
+                        AND [EventTypeid] = 'ACBE0041-7A0D-401D-B7F1-1D54965E6B29'
+                        AND [IsLatest] = 1
+                        AND username != 'administrator'
+                        AND username != 'Cognisco_QAManager'
+                        AND username NOT LIKE ( '%cognisco%' )
+                        AND username NOT LIKE ( '%test%' )
+             ),
+        cteTallyEvents
+          AS ( SELECT   Updated_by ,
+                        eventtitle ,
+                        target_date ,
+                        updated_on ,
+                        COUNT(COUNT([EventTitle])) OVER ( PARTITION BY Updated_by ) AS TotalEvents
+               FROM     [cteClosedEvents]
+               GROUP BY Updated_by ,
+                        [EventTitle] ,
+                        [Target_Date] ,
+                        [Updated_on]
+             ),
+        cteCAST
+          AS ( SELECT   Updated_by ,
+                        eventtitle ,
+                        target_date ,
+                        updated_on ,
+                        ( SELECT    CAST(CASE WHEN target_date >= Updated_on
+                                              THEN 1
+                                              ELSE 0
+                                         END AS BIT) 
+                        ) AS Target_Date_Met2
+               FROM     [cteTallyEvents]
+               GROUP BY Updated_by ,
+                        eventtitle ,
+                        target_date ,
+                        updated_on
+             ),
+        cteCounttargetdatemet
+          AS ( SELECT   Updated_by ,
+                        eventtitle AS event_title ,
+                        target_date ,
+                        updated_on ,
+                        target_date_met2 AS Target_Date_Met ,
+                        ( SELECT    SUM(CONVERT(INT, target_date_met2))
+                          FROM      cteCast
+                        ) AS Total_Target_Date_Met
+               FROM     [cteCAST]
+               GROUP BY Updated_by ,
+                        eventtitle ,
+                        target_date ,
+                        updated_on ,
+                        target_date_met2
+             )
+    SELECT  *
+    FROM    [cteCounttargetdatemet]
+			
